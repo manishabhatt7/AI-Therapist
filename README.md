@@ -1,140 +1,170 @@
 # AI Therapist
 
-## Overview
+AI Therapist is an experimental mental-health-oriented chat application with a FastAPI backend and a React frontend. The backend provides authenticated chat endpoints, email verification, and integration with an LLM (Groq/OpenAI). The frontend is a small React app that talks to the API.
 
-AI Therapist is a FastAPI-based backend application that provides AI-powered chat and user authentication APIs.
+## Table of Contents
 
-## Tech Stack
+- Overview
+- Project layout
+- Quick start
+- Backend setup
+- Frontend setup
+- Environment variables
+- Running both services
+- Troubleshooting
+- Developer notes
+
+## Project layout
+
+Top-level layout (simplified):
+
+```
+README.md                # <-- this file (root)
+backend/                 # FastAPI backend
+	├── app/
+	│   ├── auth/
+	│   ├── routes/
+	│   ├── modules/       # email, llm, memory, voice, sentiment
+	│   ├── database/
+	│   ├── prompts/
+	│   └── main.py
+	├── pyproject.toml
+	└── .env.example
+frontend/                # React frontend (Create React App)
+	├── package.json
+	└── src/
+```
+
+## Quick start (developer)
+
+Prerequisites:
 
 - Python 3.11+
-- FastAPI
-- SQLAlchemy
-- PostgreSQL
-- Alembic
-- Groq API
-- Uvicorn
-- uv (dependency management)
+- Node.js (LTS recommended, 18+ tested)
+- PostgreSQL (local or remote)
+- (optional) `uv` dependency manager — used in this repo but not required
 
-## Project Structure
+High-level steps:
 
-```
-backend/
-├── app/
-│   ├── auth/
-│   ├── routes/
-│   ├── services/
-│   ├── models/
-│   ├── schemas/
-│   ├── database/
-│   ├── config.py
-│   └── main.py
-├── alembic/
-├── pyproject.toml
-├── .env.example
-└── alembic.ini
-```
+1. Configure backend env: `cp backend/.env.example backend/.env` and update values.
+2. Install backend dependencies and run migrations.
+3. Start the backend server.
+4. Install frontend dependencies and start the frontend.
 
-## Prerequisites
+See the sections below for commands and troubleshooting notes.
 
-- Python 3.11 or newer
-- PostgreSQL
-- Groq API Key
-- uv (recommended)
+## Backend setup & run
 
-Install uv:
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-## Setup
-
-### 1. Navigate to backend
+Recommended (using `uv`) — simple and matches the repo docs:
 
 ```bash
 cd backend
-```
+# create/activate a virtualenv (recommended)
+python -m venv .venv
+source .venv/bin/activate
 
-### 2. Create environment file
-
-```bash
-cp .env.example .env
-```
-
-Update the values in `.env`, especially:
-
-- Database connection settings
-- GROQ_API_KEY
-- JWT/Auth settings
-
-### 3. Install dependencies
-
-Using uv:
-
-```bash
+# install uv (if not already installed) and sync dependencies
+curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
-```
 
-### 4. Run database migrations
+# copy environment example
+cp .env.example .env
 
-```bash
+# apply migrations
 alembic upgrade head
+
+# run the app locally (dev)
+uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+# or
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-## Running the Application
-
-From the `backend` directory:
-
-```bash
-uv run uvicorn app.main:app --reload
-```
-
-Or:
-
-```bash
-uvicorn app.main:app --reload
-```
+If you don't use `uv`: after creating and activating the venv, install packages manually (or via your preferred tool) and run the `uvicorn` command shown above.
 
 The API will be available at:
 
 - http://localhost:8000
-- Swagger Docs: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
+- Swagger: http://localhost:8000/docs
 
-## Common Commands
+## Frontend setup & run
 
-### Create a migration
-
-```bash
-alembic revision --autogenerate -m "migration message"
-```
-
-### Apply migrations
+The frontend is a Create-React-App project in `frontend/`.
 
 ```bash
-alembic upgrade head
+cd frontend
+npm install
+npm start
 ```
 
-### Roll back one migration
+If you see `sh: 1: react-scripts: not found` when running `npm start`:
+
+1. Ensure `npm install` completed without errors.
+2. Try installing `react-scripts` explicitly:
 
 ```bash
-alembic downgrade -1
+npm install --save-dev react-scripts@5.0.1
+# then
+npm start
 ```
 
-## Troubleshooting
+3. Check `node -v` and use a supported Node version (LTS 18+ recommended).
 
-### Module not found
+## Environment variables (backend)
 
-Ensure dependencies are installed:
+Copy `backend/.env.example` to `backend/.env` and fill values. Important variables used by the app:
+
+- `GROQ_API_KEY` — Groq/OpenAI API key used by the LLM integration
+- `MODEL_NAME` — model name to use
+- `GROQ_BASE_URL` — base URL for Groq/OpenAI-compatible API
+- `OPENAI_API_KEY` — optional, used for TTS/Whisper fallback
+- `WHISPER_BACKEND`, `ENABLE_TTS` — voice settings
+- `POSTGRES_*` / `DATABASE_URL` — PostgreSQL connection
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SENDER_EMAIL` — SMTP for verification/welcome emails
+- `VERIFICATION_TOKEN_EXPIRY_MINUTES` — token expiry (minutes)
+- `FRONTEND_URL` — URL used when crafting frontend-facing links (default: `http://localhost:3000`)
+- `BACKEND_URL` — URL used when crafting backend verification links (default: `http://localhost:8000`)
+
+See `backend/.env.example` for the complete example.
+
+## Troubleshooting (common issues)
+
+- ERR_CONNECTION_REFUSED (email verification): Backend not running or wrong `BACKEND_URL`. Start backend and/or update `BACKEND_URL` in `backend/.env`.
+
+- `react-scripts: not found`: Run `npm install` in `frontend/`, then `npm start`. If still failing, install `react-scripts` explicitly as shown above.
+
+- `TypeError: generate_response() got an unexpected keyword argument 'sentiment_data'`: This commonly indicates the running process is using an older/stale version of the code. Restart the backend server (stop and run `uvicorn ... --reload` again). To inspect what the running module exposes, run:
 
 ```bash
-uv sync
+python -c "import inspect; from app.modules import llm_service; print(inspect.signature(llm_service.generate_response)); print(llm_service.generate_response.__module__)"
 ```
 
-### Database connection errors
+- Database connection problems: verify `DATABASE_URL`, ensure Postgres is running and reachable from the backend host.
 
-Verify:
+- SMTP/email errors: verify SMTP credentials and that the SMTP provider allows SMTP connections from your environment (Gmail requires App Passwords or OAuth).
 
-- PostgreSQL is running
-- `.env` values are correct
-- Database exists
+## Running backend + frontend together (developer)
+
+Open two terminals:
+
+Terminal 1 — backend:
+
+```bash
+cd backend
+source .venv/bin/activate
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Terminal 2 — frontend:
+
+```bash
+cd frontend
+npm start
+```
+
+The frontend is configured to proxy API requests to `http://localhost:8000` (see `frontend/package.json`).
+
+## Developer notes
+
+- API routes live under `backend/app/routes`.
+- Business logic and integrations are in `backend/app/modules` (LLM, email, memory, sentiment, voice).
+- DB models are in `backend/app/database/models.py` and migrations are in `backend/alembic/versions`.
