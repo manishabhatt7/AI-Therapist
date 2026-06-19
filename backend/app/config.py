@@ -12,6 +12,9 @@ class Settings:
         self.groq_api_key = os.getenv("GROQ_API_KEY")
         self.model_name = os.getenv("MODEL_NAME")
         self.groq_base_url = os.getenv("GROQ_BASE_URL")
+        self.openai_api_key = os.getenv("OPENAI_API_KEY", "")          # for TTS/Whisper via OpenAI
+        self.whisper_backend = os.getenv("WHISPER_BACKEND", "groq")    # "groq" | "openai" | "local"
+        self.enable_tts = os.getenv("ENABLE_TTS", "false").lower() == "true"
         self.DATABASE_URL = os.getenv("DATABASE_URL")
         
         # Email settings

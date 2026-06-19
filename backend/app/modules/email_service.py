@@ -12,7 +12,8 @@ def generate_verification_token() -> str:
 def send_verification_email(email: str, verification_token: str) -> bool:
     """Send email with verification link to user"""
     try:
-        verification_url = f"{settings.FRONTEND_URL}/auth/verify-email?token={verification_token}"
+        # Send link that points to the backend verification endpoint
+        verification_url = f"{settings.FRONTEND_URL}/verify-email?token={verification_token}"
         
         message = MIMEText(f"Click here to verify: {verification_url}")
         message["Subject"] = f"Verify your {settings.app_name} account"
