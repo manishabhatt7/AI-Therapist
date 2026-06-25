@@ -59,11 +59,9 @@ Recommended (using `uv`) — simple and matches the repo docs:
 
 ```bash
 cd backend
-# create/activate a virtualenv (recommended)
-python -m venv .venv
-source .venv/bin/activate
 
-# install uv (if not already installed) and sync dependencies
+# create/activate a virtualenv (recommended) and sync dependencies
+# install uv (if not already installed)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 
