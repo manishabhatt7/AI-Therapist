@@ -1,13 +1,5 @@
-"""
-chat_routes.py  –  Phase 1 + Phase 2
-Adds:
-  POST /chat/sessions/{session_id}/voice  – upload audio, get transcription + response
-  GET  /chat/sessions/{session_id}/sentiment-summary  – emotion analytics for a session
-"""
-from fastapi import APIRouter, Depends, File, UploadFile, HTTPException
-from fastapi.responses import Response
+from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 from typing import List
 
 from app.auth.auth_dependency import get_current_user
@@ -15,35 +7,43 @@ from app.database.database import get_db
 from app.database.models import ChatMessage, ChatSession
 from app.modules.llm_service import generate_response
 from app.modules.sentiment_service import analyse_sentiment
-from app.modules.voice_service import transcribe_audio
+from app.modules.voice_service import transcribe_audio, synthesise_speech_base64
+from app.config import settings
 from app.schemas.chat_schemas import (
     ChatRequest, ChatResponse, VoiceChatResponse,
-    ChatSessionCreate, ChatSessionOut, ChatMessageOut
+    ChatSessionOut, ChatMessageOut,
 )
 
 router = APIRouter(tags=["Chat"], prefix="/chat")
 
 
-# ────────────────────────────────────────────────────────────
-#  Session management (unchanged from Phase 1)
-# ────────────────────────────────────────────────────────────
+def _generate_audio(text: str) -> tuple:
+    """Returns (base64_str, mime_type) or (None, None) on failure."""
+    try:
+        b64, mime = synthesise_speech_base64(text, voice=settings.tts_voice)
+        return b64, mime
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"TTS failed: {e}")
+        return None, None
+
+
+# ── Sessions ──────────────────────────────────────────────────────
 
 @router.post("/sessions", response_model=ChatSessionOut)
 def create_session(
     user_id: str = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     session = ChatSession(user_id=user_id)
-    db.add(session)
-    db.commit()
-    db.refresh(session)
+    db.add(session); db.commit(); db.refresh(session)
     return session
 
 
 @router.get("/sessions", response_model=List[ChatSessionOut])
 def list_sessions(
     user_id: str = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     return (
         db.query(ChatSession)
@@ -53,184 +53,102 @@ def list_sessions(
     )
 
 
-# ────────────────────────────────────────────────────────────
-#  Phase 1: Text chat
-# ────────────────────────────────────────────────────────────
+# ── Text message ──────────────────────────────────────────────────
 
 @router.post("/sessions/{session_id}/message", response_model=ChatResponse)
-def chat_in_session(
+def send_message(
     session_id: str,
     request: ChatRequest,
+    tts: bool = Query(default=True),
     user_id: str = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """Send a text message and receive a therapist response + sentiment analysis."""
     session = db.query(ChatSession).filter(
-        ChatSession.id == session_id,
-        ChatSession.user_id == user_id
+        ChatSession.id == session_id, ChatSession.user_id == user_id
     ).first()
     if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail="Session not found.")
 
-    # Analyse sentiment before generating response
     sentiment_data = analyse_sentiment(request.message)
-
-    ai_response = generate_response(
-        session_id=session_id,
-        user_message=request.message,
-        db=db,
-        sentiment_data=sentiment_data,
-        input_type="text"
+    ai_text = generate_response(
+        session_id=session_id, user_message=request.message,
+        db=db, sentiment_data=sentiment_data, input_type="text",
     )
+
+    audio_base64, audio_mime = _generate_audio(ai_text) if tts else (None, None)
 
     return ChatResponse(
-        response=ai_response,
+        response=ai_text,
         sentiment=sentiment_data.get("sentiment"),
         dominant_emotion=sentiment_data.get("dominant_emotion"),
-        crisis_flag=sentiment_data.get("crisis_flag")
+        crisis_flag=sentiment_data.get("crisis_flag"),
+        audio_base64=audio_base64,
+        audio_mime=audio_mime,
     )
 
 
-# ────────────────────────────────────────────────────────────
-#  Phase 2: Voice chat
-# ────────────────────────────────────────────────────────────
+# ── Voice message ─────────────────────────────────────────────────
 
 @router.post("/sessions/{session_id}/voice", response_model=VoiceChatResponse)
-async def voice_chat_in_session(
+async def send_voice_message(
     session_id: str,
-    audio: UploadFile = File(..., description="Audio file (webm, mp3, wav, ogg, m4a)"),
+    audio: UploadFile = File(...),
+    tts: bool = Query(default=True),
     user_id: str = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
-    """
-    Upload audio → transcribe with Whisper → analyse sentiment → generate therapist response.
-
-    Accepted audio formats: webm, mp3, wav, ogg, m4a
-    Max recommended size: 25 MB (Groq/OpenAI API limit)
-    """
     session = db.query(ChatSession).filter(
-        ChatSession.id == session_id,
-        ChatSession.user_id == user_id
+        ChatSession.id == session_id, ChatSession.user_id == user_id
     ).first()
     if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail="Session not found.")
 
-    # 1. Read audio bytes
     audio_bytes = await audio.read()
     if not audio_bytes:
-        raise HTTPException(status_code=400, detail="Empty audio file")
+        raise HTTPException(status_code=400, detail="Empty audio file.")
 
-    # 2. Transcribe
     try:
         transcription = transcribe_audio(audio_bytes, filename=audio.filename or "audio.webm")
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Transcription failed: {str(e)}")
+        raise HTTPException(status_code=502, detail=f"Transcription failed: {e}")
 
     if not transcription.strip():
-        raise HTTPException(status_code=422, detail="Could not transcribe audio – please speak clearly.")
+        raise HTTPException(status_code=422, detail="Could not transcribe audio.")
 
-    # 3. Sentiment analysis on transcribed text
     sentiment_data = analyse_sentiment(transcription)
-
-    # 4. Generate therapist response
-    ai_response = generate_response(
-        session_id=session_id,
-        user_message=transcription,
-        db=db,
-        sentiment_data=sentiment_data,
-        input_type="voice",
-        transcription=transcription
+    ai_text = generate_response(
+        session_id=session_id, user_message=transcription,
+        db=db, sentiment_data=sentiment_data,
+        input_type="voice", transcription=transcription,
     )
+
+    audio_base64, audio_mime = _generate_audio(ai_text) if tts else (None, None)
 
     return VoiceChatResponse(
         transcription=transcription,
-        response=ai_response,
+        response=ai_text,
         sentiment=sentiment_data.get("sentiment"),
         dominant_emotion=sentiment_data.get("dominant_emotion"),
-        crisis_flag=sentiment_data.get("crisis_flag")
+        crisis_flag=sentiment_data.get("crisis_flag"),
+        audio_base64=audio_base64,
+        audio_mime=audio_mime,
     )
 
 
-# ────────────────────────────────────────────────────────────
-#  Phase 2: Sentiment analytics for a session
-# ────────────────────────────────────────────────────────────
-
-@router.get("/sessions/{session_id}/sentiment-summary")
-def get_sentiment_summary(
-    session_id: str,
-    user_id: str = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Returns aggregated emotion data for a session.
-    Useful for therapist dashboard / user self-reflection views.
-    """
-    session = db.query(ChatSession).filter(
-        ChatSession.id == session_id,
-        ChatSession.user_id == user_id
-    ).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    user_messages = (
-        db.query(ChatMessage)
-        .filter(
-            ChatMessage.session_id == session_id,
-            ChatMessage.role == "user",
-            ChatMessage.sentiment.isnot(None)
-        )
-        .all()
-    )
-
-    if not user_messages:
-        return {"message": "No sentiment data available yet."}
-
-    # Aggregate
-    emotion_counts: dict = {}
-    sentiment_counts: dict = {}
-    scores = []
-    crisis_count = 0
-
-    for msg in user_messages:
-        e = msg.dominant_emotion or "unknown"
-        s = msg.sentiment or "neutral"
-        emotion_counts[e] = emotion_counts.get(e, 0) + 1
-        sentiment_counts[s] = sentiment_counts.get(s, 0) + 1
-        if msg.sentiment_score:
-            scores.append(msg.sentiment_score)
-
-    dominant_emotion = max(emotion_counts, key=emotion_counts.get)
-    avg_score = round(sum(scores) / len(scores), 2) if scores else None
-
-    return {
-        "session_id": session_id,
-        "total_user_messages": len(user_messages),
-        "dominant_emotion_overall": dominant_emotion,
-        "emotion_breakdown": emotion_counts,
-        "sentiment_breakdown": sentiment_counts,
-        "average_confidence": avg_score,
-        "voice_message_count": sum(1 for m in user_messages if m.input_type == "voice"),
-        "text_message_count": sum(1 for m in user_messages if m.input_type == "text"),
-    }
-
-
-# ────────────────────────────────────────────────────────────
-#  Message history
-# ────────────────────────────────────────────────────────────
+# ── Messages ──────────────────────────────────────────────────────
 
 @router.get("/sessions/{session_id}/messages", response_model=List[ChatMessageOut])
-def get_session_messages(
+def get_messages(
     session_id: str,
+    limit: int = 50,
     user_id: str = Depends(get_current_user),
     db: Session = Depends(get_db),
-    limit: int = 50
 ):
     session = db.query(ChatSession).filter(
-        ChatSession.id == session_id,
-        ChatSession.user_id == user_id
+        ChatSession.id == session_id, ChatSession.user_id == user_id
     ).first()
     if not session:
-        return []
+        raise HTTPException(status_code=404, detail="Session not found.")
 
     messages = (
         db.query(ChatMessage)
@@ -241,43 +159,57 @@ def get_session_messages(
     )
     return [
         ChatMessageOut(
-            id=msg.id,
-            role=msg.role,
-            content=msg.content,
-            input_type=msg.input_type,
-            sentiment=msg.sentiment,
-            dominant_emotion=msg.dominant_emotion,
-            transcription=msg.transcription,
-            created_at=msg.created_at
+            id=m.id, role=m.role, content=m.content,
+            input_type=m.input_type, sentiment=m.sentiment,
+            dominant_emotion=m.dominant_emotion, transcription=m.transcription,
+            crisis_flag=m.crisis_flag, created_at=m.created_at,
         )
-        for msg in messages
+        for m in messages
     ]
 
 
-@router.get("/history")
-def get_chat_history(
+# ── Sentiment summary ─────────────────────────────────────────────
+
+@router.get("/sessions/{session_id}/sentiment-summary")
+def get_sentiment_summary(
+    session_id: str,
     user_id: str = Depends(get_current_user),
     db: Session = Depends(get_db),
-    limit: int = 50
 ):
-    """Backward-compatible flat history endpoint."""
-    messages = (
+    session = db.query(ChatSession).filter(
+        ChatSession.id == session_id, ChatSession.user_id == user_id
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    msgs = (
         db.query(ChatMessage)
-        .filter(ChatMessage.user_id == user_id)
-        .order_by(ChatMessage.created_at.asc())
-        .limit(limit)
+        .filter(ChatMessage.session_id == session_id,
+                ChatMessage.role == "user",
+                ChatMessage.sentiment.isnot(None))
         .all()
     )
+    if not msgs:
+        return {"message": "No sentiment data yet."}
+
+    emotion_counts, sentiment_counts, scores = {}, {}, []
+    crisis_count = 0
+    for m in msgs:
+        e = m.dominant_emotion or "unknown"
+        s = m.sentiment or "neutral"
+        emotion_counts[e] = emotion_counts.get(e, 0) + 1
+        sentiment_counts[s] = sentiment_counts.get(s, 0) + 1
+        if m.sentiment_score: scores.append(m.sentiment_score)
+        if m.crisis_flag: crisis_count += 1
+
     return {
-        "messages": [
-            {
-                "role": msg.role,
-                "content": msg.content,
-                "input_type": msg.input_type,
-                "sentiment": msg.sentiment,
-                "dominant_emotion": msg.dominant_emotion,
-                "created_at": msg.created_at,
-            }
-            for msg in messages
-        ]
+        "session_id": session_id,
+        "total_user_messages": len(msgs),
+        "dominant_emotion_overall": max(emotion_counts, key=emotion_counts.get),
+        "emotion_breakdown": emotion_counts,
+        "sentiment_breakdown": sentiment_counts,
+        "average_confidence": round(sum(scores)/len(scores), 2) if scores else None,
+        "crisis_flag_count": crisis_count,
+        "voice_message_count": sum(1 for m in msgs if m.input_type == "voice"),
+        "text_message_count": sum(1 for m in msgs if m.input_type == "text"),
     }

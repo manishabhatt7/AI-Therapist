@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional
 
 
 class ChatRequest(BaseModel):
@@ -12,16 +12,18 @@ class ChatResponse(BaseModel):
     sentiment: Optional[str] = None
     dominant_emotion: Optional[str] = None
     crisis_flag: Optional[bool] = None
+    audio_base64: Optional[str] = None
+    audio_mime: Optional[str] = None   # "audio/wav" or "audio/mpeg"
 
 
 class VoiceChatResponse(BaseModel):
-    """Returned after processing a voice message."""
-    transcription: str         # what the user said
-    response: str              # therapist reply text
+    transcription: str
+    response: str
     sentiment: Optional[str] = None
     dominant_emotion: Optional[str] = None
     crisis_flag: Optional[bool] = None
-    audio_url: Optional[str] = None  # URL to synthesised speech (if TTS enabled)
+    audio_base64: Optional[str] = None
+    audio_mime: Optional[str] = None
 
 
 class ChatSessionCreate(BaseModel):
@@ -45,6 +47,7 @@ class ChatMessageOut(BaseModel):
     sentiment: Optional[str] = None
     dominant_emotion: Optional[str] = None
     transcription: Optional[str] = None
+    crisis_flag: Optional[bool] = None
     created_at: datetime
 
     class Config:
