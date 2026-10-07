@@ -51,25 +51,30 @@ def add_message_with_meta(
     memory_store[session_id] = memory_store[session_id][-MAX_HISTORY:]
 
     if db:
-        # We need user_id; fetch from session
-        from app.database.models import ChatSession
-        session_obj = db.query(ChatSession).filter(ChatSession.id == session_id).first()
-        user_id = session_obj.user_id if session_obj else session_id
+        try:
+            # We need user_id; fetch from session
+            from app.database.models import ChatSession
+            session_obj = db.query(ChatSession).filter(ChatSession.id == session_id).first()
+            user_id = session_obj.user_id if session_obj else session_id
 
-        chat_msg = ChatMessage(
-            user_id=user_id,
-            session_id=session_id,
-            role=role,
-            content=content,
-            input_type=input_type,
-            sentiment=sentiment,
-            sentiment_score=sentiment_score,
-            dominant_emotion=dominant_emotion,
-            crisis_flag=crisis_flag,
-            transcription=transcription,
-        )
-        db.add(chat_msg)
-        db.commit()
+            chat_msg = ChatMessage(
+                user_id=user_id,
+                session_id=session_id,
+                role=role,
+                content=content,
+                input_type=input_type,
+                sentiment=sentiment,
+                sentiment_score=sentiment_score,
+                dominant_emotion=dominant_emotion,
+                crisis_flag=crisis_flag,
+                transcription=transcription,
+            )
+            db.add(chat_msg)
+            db.commit()
+        except Exception as db_err:
+            db.rollback()
+            import logging
+            logging.getLogger(__name__).error(f"Failed to persist message to database: {db_err}")
 
 
 # Backward-compat alias used in old routes
