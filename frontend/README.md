@@ -1,73 +1,63 @@
-# Solace – AI Therapist Frontend
+# Solace UI (Streamlit)
 
-React frontend for the Solace AI Therapist. Connects to the FastAPI backend.
+A self-contained, compassionate mental-health conversational interface built with **Streamlit**. It calls Solace's application services directly, so a separate FastAPI server is not required.
 
-## Stack
+---
 
-- **React 18** – UI framework
-- **React Router v6** – client-side routing
-- **Axios** – API calls with JWT interceptors
-- **Framer Motion** – animations
-- **React Hot Toast** – notifications
-- **React Markdown** – render therapist responses with markdown
-- **Lucide React** – icons
-- **date-fns** – date formatting
+## 🌟 Features
 
-## Setup
+- 🔐 **Full Authentication**: User Registration, Login (JWT stored in session state), Email Verification, and Verification Link Resend.
+- 💬 **Therapeutic Chat Interface**: Conversational feed with formatted markdown responses and emotional resonance.
+- 🎙️ **Voice Messaging & Audio Responses**:
+  - Live microphone recording via `st.audio_input` or file upload (`.wav`, `.mp3`, `.m4a`, `.ogg`, `.webm`).
+  - Automated Whisper transcription with backend analysis.
+  - Spoken audio replies synthesized via Text-to-Speech (TTS).
+- 📊 **Emotional Insights & Sentiment Breakdown**:
+  - Primary emotion detection with confidence scoring and emoji representation.
+  - Real-time sentiment breakdown (Positive, Negative, Neutral, Mixed).
+  - Breakdown of detected emotions across session messages.
+- 🆘 **Crisis Detection & Support Banner**:
+  - Real-time crisis detection displaying helpline contacts (988 Suicide & Crisis Lifeline, Crisis Text Line).
+- 🗂️ **Multi-Session Management**:
+  - Create new sessions and switch between conversation histories with custom titles and dates.
+
+---
+
+## 🚀 Quick Start
+
+### 1. Install Dependencies
+
+Ensure Python 3.11+ and `uv` are installed. Inside the `frontend/` directory:
 
 ```bash
-npm install
-cp .env.example .env
-npm start
+uv sync
 ```
 
-Runs on http://localhost:3000. Proxies `/auth` and `/chat` to `http://localhost:8000`.
+### 2. Configure Environment (Optional)
 
-## Build for production
+Set the database, AI, email, and voice settings in `backend/.env`. Streamlit loads that shared configuration when it starts.
+
+### 3. Run the Streamlit Application
 
 ```bash
-npm run build
+uv run streamlit run app.py
 ```
 
-## Structure
+The app will open automatically in your browser at:
+`http://localhost:8501`
+
+---
+
+## 📂 Project Structure
 
 ```
-src/
-├── components/
-│   ├── auth/
-│   │   ├── Login.js          # Login form
-│   │   └── Register.js       # Registration form
-│   ├── chat/
-│   │   ├── Sidebar.js        # Session list + new session
-│   │   ├── MessageBubble.js  # Chat bubble (text + voice)
-│   │   ├── VoiceRecorder.js  # Record/preview/send audio
-│   │   └── SentimentPanel.js # Emotion analytics panel
-│   └── ui/
-│       └── index.js          # Button, Input, Card, Badge, Spinner, Tooltip
-├── context/
-│   └── AuthContext.js        # Auth state + login/logout
-├── hooks/
-│   └── useVoiceRecorder.js   # MediaRecorder wrapper
-├── pages/
-│   └── ChatPage.js           # Main chat layout
-├── services/
-│   └── api.js                # Axios instance + all API calls
-├── utils/
-│   └── helpers.js            # Date formatting, emotion metadata
-├── App.js                    # Router + providers
-└── index.css                 # Design tokens + reset
+frontend/
+├── app.py                # Main Streamlit application entry point
+├── api_client.py         # In-process bridge to Solace services
+├── utils.py              # Emotion metadata, date/time formatters, audio decoding
+├── styles.py             # Solace custom dark theme CSS and styling
+├── pyproject.toml        # Streamlit and service dependencies
+├── .streamlit/
+│   └── config.toml       # Streamlit theme and server configuration
+└── README.md             # This guide
 ```
-
-## Design
-
-- Dark navy base (`#0D1117`) with lavender accent (`#C4B5FD`)
-- **Signature element:** Therapist reply bubbles use Lora serif font + lavender left-border glow — intentionally warm, not chatbot-like
-- Inter for all UI chrome, Lora for all therapist content
-- Teal (`#14B8A6`) = positive / online states
-- Rose (`#FB7185`) = alerts / crisis flag
-
-## Environment
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `REACT_APP_API_URL` | Backend base URL | `""` (uses proxy) |

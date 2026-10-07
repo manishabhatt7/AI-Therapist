@@ -1,6 +1,6 @@
-# AI Therapist
+# AI Therapist (Solace)
 
-AI Therapist is an experimental mental-health-oriented chat application with a FastAPI backend and a React frontend. The backend provides authenticated chat endpoints, email verification, and integration with an LLM (Groq/OpenAI). The frontend is a small React app that talks to the API.
+AI Therapist is a mental-health-oriented conversational application. Its Streamlit UI directly uses the authentication, chat, email, sentiment, voice, and database services, so it runs as a single process. The FastAPI app remains available only for an optional HTTP API deployment.
 
 ## Table of Contents
 
@@ -8,31 +8,36 @@ AI Therapist is an experimental mental-health-oriented chat application with a F
 - Project layout
 - Quick start
 - Backend setup
-- Frontend setup
+- Frontend setup (Streamlit)
 - Environment variables
-- Running both services
+- Running the application
 - Troubleshooting
 - Developer notes
 
 ## Project layout
 
-Top-level layout (simplified):
+Top-level layout:
 
 ```
-README.md                # <-- this file (root)
+README.md                # Root project documentation
 backend/                 # FastAPI backend
 	├── app/
-	│   ├── auth/
-	│   ├── routes/
+	│   ├── auth/          # JWT authentication & email verification
+	│   ├── routes/        # Chat & session endpoints
 	│   ├── modules/       # email, llm, memory, voice, sentiment
-	│   ├── database/
-	│   ├── prompts/
+	│   ├── database/      # SQLAlchemy models & migrations
+	│   ├── prompts/       # Therapeutic prompt definitions
 	│   └── main.py
 	├── pyproject.toml
 	└── .env.example
-frontend/                # React frontend (Create React App)
-	├── package.json
-	└── src/
+frontend/                # Streamlit UI
+	├── app.py             # Streamlit application entry point
+	├── api_client.py      # In-process bridge to application services
+	├── utils.py           # Emotion metadata, audio decoding, formatters
+	├── styles.py          # Custom CSS theme & styling
+	├── pyproject.toml     # Streamlit and service dependencies
+	├── .streamlit/        # Streamlit theme & config
+	└── README.md
 ```
 
 ## Quick start (developer)
@@ -40,72 +45,45 @@ frontend/                # React frontend (Create React App)
 Prerequisites:
 
 - Python 3.11+
-- Node.js (LTS recommended, 18+ tested)
 - PostgreSQL (local or remote)
-- (optional) `uv` dependency manager — used in this repo but not required
 
 High-level steps:
 
 1. Configure backend env: `cp backend/.env.example backend/.env` and update values.
-2. Install backend dependencies and run migrations.
-3. Start the backend server.
-4. Install frontend dependencies and start the frontend.
-
-See the sections below for commands and troubleshooting notes.
+2. Run migrations once (`cd backend && uv run alembic upgrade head`).
+3. Launch the Streamlit UI (`cd frontend && uv run streamlit run app.py`).
 
 ## Backend setup & run
-
-Recommended (using `uv`) — simple and matches the repo docs:
 
 ```bash
 cd backend
 
-# create/activate a virtualenv (recommended) and sync dependencies
-# install uv (if not already installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-uv sync
-
 # copy environment example
 cp .env.example .env
 
-# apply migrations
+# apply database migrations
 alembic upgrade head
 
 # run the app locally (dev)
-uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-# or
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
-
-If you don't use `uv`: after creating and activating the venv, install packages manually (or via your preferred tool) and run the `uvicorn` command shown above.
 
 The API will be available at:
 
 - http://localhost:8000
-- Swagger: http://localhost:8000/docs
+- Swagger Docs: http://localhost:8000/docs
 
-## Frontend setup & run
-
-The frontend is a Create-React-App project in `frontend/`.
+## Frontend setup & run (Streamlit)
 
 ```bash
 cd frontend
-npm install
-npm start
+uv sync
+uv run streamlit run app.py
 ```
 
-If you see `sh: 1: react-scripts: not found` when running `npm start`:
+The Streamlit UI will be available at:
 
-1. Ensure `npm install` completed without errors.
-2. Try installing `react-scripts` explicitly:
-
-```bash
-npm install --save-dev react-scripts@5.0.1
-# then
-npm start
-```
-
-3. Check `node -v` and use a supported Node version (LTS 18+ recommended).
+- http://localhost:8501
 
 ## Environment variables (backend)
 
@@ -119,47 +97,18 @@ Copy `backend/.env.example` to `backend/.env` and fill values. Important variabl
 - `POSTGRES_*` / `DATABASE_URL` — PostgreSQL connection
 - `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SENDER_EMAIL` — SMTP for verification/welcome emails
 - `VERIFICATION_TOKEN_EXPIRY_MINUTES` — token expiry (minutes)
-- `FRONTEND_URL` — URL used when crafting frontend-facing links (default: `http://localhost:3000`)
-- `BACKEND_URL` — URL used when crafting backend verification links (default: `http://localhost:8000`)
+- `FRONTEND_URL` — URL used when crafting frontend-facing links (default: `http://localhost:8501`)
 
-See `backend/.env.example` for the complete example.
+## Running the application (developer)
 
-## Troubleshooting (common issues)
-
-- ERR_CONNECTION_REFUSED (email verification): Backend not running or wrong `BACKEND_URL`. Start backend and/or update `BACKEND_URL` in `backend/.env`.
-
-- `react-scripts: not found`: Run `npm install` in `frontend/`, then `npm start`. If still failing, install `react-scripts` explicitly as shown above.
-
-- `TypeError: generate_response() got an unexpected keyword argument 'sentiment_data'`: This commonly indicates the running process is using an older/stale version of the code. Restart the backend server (stop and run `uvicorn ... --reload` again). To inspect what the running module exposes, run:
-
-```bash
-python -c "import inspect; from app.modules import llm_service; print(inspect.signature(llm_service.generate_response)); print(llm_service.generate_response.__module__)"
-```
-
-- Database connection problems: verify `DATABASE_URL`, ensure Postgres is running and reachable from the backend host.
-
-- SMTP/email errors: verify SMTP credentials and that the SMTP provider allows SMTP connections from your environment (Gmail requires App Passwords or OAuth).
-
-## Running backend + frontend together (developer)
-
-Open two terminals:
-
-Terminal 1 — backend:
-
-```bash
-cd backend
-source .venv/bin/activate
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-```
-
-Terminal 2 — frontend:
+One process is all that is needed:
 
 ```bash
 cd frontend
-npm start
+uv run streamlit run app.py
 ```
 
-The frontend is configured to proxy API requests to `http://localhost:8000` (see `frontend/package.json`).
+The optional FastAPI app can still be started from `backend/` when an external HTTP API is specifically needed.
 
 ## Developer notes
 
