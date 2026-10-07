@@ -2,7 +2,7 @@ import os
 import streamlit as st
 from dotenv import load_dotenv
 
-from api_client import APIClient
+from api_client import APIClient, upgrade_database_to_head
 from utils import (
     get_emotion_meta,
     format_timestamp,
@@ -22,6 +22,20 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+
+@st.cache_resource(show_spinner="Preparing the database...")
+def prepare_database() -> bool:
+    """Run pending schema migrations once for this Streamlit server process."""
+    upgrade_database_to_head()
+    return True
+
+
+try:
+    prepare_database()
+except RuntimeError as error:
+    st.error(str(error))
+    st.stop()
 
 # Apply custom CSS
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)

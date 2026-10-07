@@ -36,6 +36,21 @@ Result = Tuple[bool, Any]
 T = TypeVar("T")
 
 
+def upgrade_database_to_head() -> None:
+    """Apply all pending Alembic revisions using the shared backend settings."""
+    from alembic import command
+    from alembic.config import Config
+
+    config = Config(str(BACKEND_ROOT / "alembic.ini"))
+    # Keep migration discovery independent of the directory used to launch
+    # Streamlit (for example, `frontend/` locally or a hosting workdir).
+    config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
+    try:
+        command.upgrade(config, "head")
+    except Exception as error:
+        raise RuntimeError(f"Database migration failed: {error}") from error
+
+
 class APIClient:
     """Compatibility facade for the UI, backed by local Python calls."""
 
