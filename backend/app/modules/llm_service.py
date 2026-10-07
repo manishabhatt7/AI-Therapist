@@ -1,13 +1,8 @@
 """
 llm_service.py
 ==============
-Qwen3 models output <think>...</think> blocks before the actual response
-when reasoning mode is active. We must strip these before returning to the user
-and before saving to DB or sending to TTS.
-
-Two fixes applied:
-  1. reasoning_effort="none"  — disables thinking mode entirely (fastest, cleanest)
-  2. _strip_think()           — fallback strip in case the tag still appears
+Generates therapeutic responses using the LLM model configured in .env / settings.
+Persists conversation history with emotional context in the database.
 """
 import re
 import logging
@@ -22,28 +17,27 @@ logger = logging.getLogger(__name__)
 
 _client = None
 
+
 def _get_client():
     global _client
     if _client is None:
-        _client = Groq(api_key=settings.groq_api_key)
+        kwargs = {"api_key": settings.groq_api_key}
+        if settings.groq_base_url:
+            kwargs["base_url"] = settings.groq_base_url
+        _client = Groq(**kwargs)
     return _client
 
 
 def _strip_think(text: str) -> str:
-    """
-    Remove Qwen3 <think>...</think> reasoning blocks from the response.
-    These appear when reasoning_effort is not set to 'none'.
-    We strip them as a safety net even when reasoning is disabled.
-    """
-    # Remove <think>...</think> including everything inside (non-greedy, dotall)
+    """Strip <think>...</think> reasoning blocks from response if present."""
     cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     return cleaned.strip()
 
 
 def _build_sentiment_context(sentiment_data: dict) -> str:
-    emotion    = sentiment_data.get("dominant_emotion", "neutral")
-    crisis     = sentiment_data.get("crisis_flag", False)
-    reasoning  = sentiment_data.get("crisis_reasoning", "")
+    emotion   = sentiment_data.get("dominant_emotion", "neutral")
+    crisis    = sentiment_data.get("crisis_flag", False)
+    reasoning = sentiment_data.get("crisis_reasoning", "")
 
     note = f"\n\n[THERAPIST CONTEXT — hidden from user]\nDetected emotion: {emotion}."
     if crisis:
@@ -64,47 +58,67 @@ def generate_response(
     input_type: str = "text",
     transcription: str = None,
 ) -> str:
+    # 1. ALWAYS persist the user message to database
     try:
-        history        = get_session_history(session_id, db)
-        client         = _get_client()
+        add_message_with_meta(
+            session_id=session_id,
+            role="user",
+            content=user_message,
+            db=db,
+            input_type=input_type,
+            sentiment=sentiment_data.get("sentiment") if sentiment_data else None,
+            sentiment_score=sentiment_data.get("sentiment_score") if sentiment_data else None,
+            dominant_emotion=sentiment_data.get("dominant_emotion") if sentiment_data else None,
+            crisis_flag=sentiment_data.get("crisis_flag") if sentiment_data else None,
+            transcription=transcription,
+        )
+    except Exception as e:
+        logger.error(f"Error persisting user message to DB: {e}")
+
+    ai_response = ""
+    try:
+        history = get_session_history(session_id, db)
+        client = _get_client()
         system_content = THERAPIST_SYSTEM_PROMPT
 
         if sentiment_data:
             system_content += _build_sentiment_context(sentiment_data)
 
         messages = [{"role": "system", "content": system_content}]
-        messages.extend(history)
-        messages.append({"role": "user", "content": user_message})
+
+        # Append previous conversation history
+        for msg in history:
+            if isinstance(msg, dict) and msg.get("role") in ("user", "assistant") and msg.get("content"):
+                messages.append({"role": msg["role"], "content": msg["content"]})
+
+        # Avoid duplicating current user message if already present at the end
+        if not history or history[-1].get("content") != user_message:
+            messages.append({"role": "user", "content": user_message})
+
+        model_name = settings.llm_model
 
         response = client.chat.completions.create(
-            model=settings.model_name,
+            model=model_name,
             messages=messages,
             temperature=0.75,
             max_tokens=400,
-            # KEY FIX: disable Qwen3 thinking/reasoning mode entirely.
-            # Without this, the model prepends <think>...</think> to every response.
-            # "none" = non-thinking mode — faster, no reasoning leak.
-            reasoning_effort="none",
         )
-
-        raw         = response.choices[0].message.content
-        ai_response = _strip_think(raw)   # belt-and-suspenders strip
-
-        add_message_with_meta(
-            session_id=session_id, role="user", content=user_message, db=db,
-            input_type=input_type,
-            sentiment=sentiment_data.get("sentiment")        if sentiment_data else None,
-            sentiment_score=sentiment_data.get("sentiment_score") if sentiment_data else None,
-            dominant_emotion=sentiment_data.get("dominant_emotion") if sentiment_data else None,
-            crisis_flag=sentiment_data.get("crisis_flag")    if sentiment_data else None,
-            transcription=transcription,
-        )
-        add_message_with_meta(
-            session_id=session_id, role="assistant", content=ai_response, db=db,
-        )
-
-        return ai_response
+        raw = response.choices[0].message.content
+        ai_response = _strip_think(raw)
 
     except Exception as e:
-        logger.error(f"LLM error: {e}")
-        return "I'm here to listen, but something went wrong on my end. Please try again."
+        logger.error(f"LLM generation error with model '{settings.llm_model}': {e}", exc_info=True)
+        ai_response = "I hear you, and I am here for you. Could you share a little more about how that is making you feel?"
+
+    # 2. ALWAYS persist the assistant response to database
+    try:
+        add_message_with_meta(
+            session_id=session_id,
+            role="assistant",
+            content=ai_response,
+            db=db,
+        )
+    except Exception as e:
+        logger.error(f"Error persisting assistant message to DB: {e}")
+
+    return ai_response

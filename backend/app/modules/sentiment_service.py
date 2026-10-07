@@ -1,8 +1,8 @@
 """
 sentiment_service.py
 ====================
-Uses qwen/qwen3-32b with reasoning_effort="none" to prevent <think> leakage
-into JSON output, and with response_format=json_object for clean parsing.
+Clinical emotion and crisis classifier using settings.sentiment_model.
+Returns structured JSON with emotion, sentiment, and safety flags.
 """
 import re
 import json
@@ -14,10 +14,14 @@ logger = logging.getLogger(__name__)
 
 _client = None
 
+
 def _get_client():
     global _client
     if _client is None:
-        _client = Groq(api_key=settings.groq_api_key)
+        kwargs = {"api_key": settings.groq_api_key}
+        if settings.groq_base_url:
+            kwargs["base_url"] = settings.groq_base_url
+        _client = Groq(**kwargs)
     return _client
 
 
@@ -37,13 +41,14 @@ CRISIS_KEYWORDS = [
     "will suicide", "i will suicide",
 ]
 
+
 def _keyword_crisis_check(text: str) -> bool:
     lower = text.lower()
     return any(kw in lower for kw in CRISIS_KEYWORDS)
 
 
 def _strip_think(text: str) -> str:
-    """Strip Qwen3 <think> blocks if they leak into JSON output."""
+    """Strip reasoning blocks if they appear in JSON output."""
     return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 
@@ -83,19 +88,16 @@ def analyse_sentiment(text: str) -> dict:
 
     try:
         client = _get_client()
-
         response = client.chat.completions.create(
-            model="qwen/qwen3-32b",
+            model=settings.sentiment_model,
             messages=[
                 {"role": "system", "content": SENTIMENT_SYSTEM_PROMPT},
                 {"role": "user",   "content": text},
             ],
             temperature=0.0,
             max_tokens=200,
-            reasoning_effort="none",                        # disable <think> blocks
-            response_format={"type": "json_object"},        # force valid JSON output
+            response_format={"type": "json_object"},
         )
-
         raw  = _strip_think(response.choices[0].message.content.strip())
         data = json.loads(raw)
 
@@ -119,7 +121,7 @@ def analyse_sentiment(text: str) -> dict:
         }
 
     except Exception as e:
-        logger.warning(f"Sentiment analysis failed: {e}")
+        logger.warning(f"Sentiment analysis failed using model '{settings.sentiment_model}': {e}", exc_info=True)
         return {
             "sentiment":         "negative" if keyword_crisis else "neutral",
             "sentiment_score":   0.95 if keyword_crisis else 0.5,
